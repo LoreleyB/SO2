@@ -1,0 +1,324 @@
+/*
+ * 2Productor_Consumidor.c
+ *
+ *  Created on: 2 mar. 2020
+ *      Author: loreley
+ */
+#ifdef __USE_CMSIS
+#include "LPC17xx.h"
+#endif
+
+#include <cr_section_macros.h>
+#include <stdlib.h>
+/* Kernel includes. */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+//Prioridades
+#define CONSUMISOR_TASK_PRIORITY	( tskIDLE_PRIORITY + 1 ) //menor prioridad
+#define	PERIODICA_TASK_PRIORITY		( tskIDLE_PRIORITY + 4 )	//mayor
+#define	APERIODICA_TASK_PRIORITY	( tskIDLE_PRIORITY + 4 )
+
+
+//Define del programa
+#define MAX_STRING_LEN	60
+#define BUFF_AUX		10
+#define portNEW_DELAY 	200
+#define MAX_POINTERS	10
+
+/* The rate at which data is sent to the queue, specified in milliseconds. */
+#define PERIODIC_SEND_FREQUENCY_MS	( 50 / portTICK_RATE_MS )
+
+
+static void vConsumidorTask(void *pvParameters);
+static void vPeriodicaTask(void *pvParameters);
+static void vAperiodicaTask(void *pvParameters);
+
+char * vRandom_String(void);
+
+void UART1_Init(void);
+void UART_Send(char* datos, int size);
+
+/* Declare a variable of type QueueHandle_t to hold the handle of the queue being created. */
+QueueHandle_t xPointerQueue;
+
+//Estructura del mensaje
+struct msg_struct {
+	char * msg;
+	int valor;
+	};
+
+
+int main(void) {
+
+
+
+
+
+	/* Enable traceanalycer snapshot */
+	vTraceEnable(TRC_START);
+
+	//creo cola de 5 punteros a struct
+	xPointerQueue = xQueueCreate(MAX_POINTERS, sizeof(struct msg_struct *));
+
+	if (xPointerQueue != NULL) {
+		/**El valor especifica el número de palabras que puede contener la pila, no el número de bytes.
+				 * Por ejemplo, la pila Cortex-M3 tiene 32 bits de ancho, por lo tanto, si usStackDepth
+				 * se pasa como 100, se asignarán 400 bytes de espacio de pila (100 * 4 bytes).
+				 * La profundidad de la pila multiplicada por el ancho de la pila no debe exceder
+				 * el valor máximo que puede contener una variable de tipo size_t.**/
+
+
+		//taskcode(function), name, stacksize, parameters, handletask
+		xTaskCreate(vConsumidorTask, "Consumidor", configMINIMAL_STACK_SIZE,NULL, CONSUMISOR_TASK_PRIORITY, NULL);
+
+		xTaskCreate(vPeriodicaTask, "Temperatura",configMINIMAL_STACK_SIZE, NULL, PERIODICA_TASK_PRIORITY,	NULL);
+
+		xTaskCreate(vAperiodicaTask, "Usuario", configMINIMAL_STACK_SIZE,NULL, APERIODICA_TASK_PRIORITY, NULL);
+
+		/**El tamaño de la pila utilizada por la tarea idle está definido por la constante
+		 * definida por la aplicación configMINIMAL_STACK_SIZE estándar es el mínimo recomendado para cualquier tarea */
+
+
+		vTaskStartScheduler();
+
+	}
+
+
+	for (;;)
+		;
+	return 0;
+}
+
+
+/**
+ * Tarea q simula el envio periodico de temperaturas de un sensor.Se genera
+ * un valor entre 10 y 55, emulando medicion.
+ */
+static void vPeriodicaTask(void *pvParameters) {
+
+
+
+
+	portTickType xLastWakeTime;
+	xLastWakeTime = xTaskGetTickCount();
+	/**The xLastWakeTime variable needs to be initialized with the current tick
+	* count. Note that this is the only time the variable is explicitly written to.
+	 * After this xLastWakeTime is managed automatically by the vTaskDelayUntil() API function*/
+
+
+	/*tarea que realiza una acción cada 10 milliseconds. */
+	const TickType_t xPeriod = pdMS_TO_TICKS(10);
+
+
+	struct msg_struct *msg = pvPortMalloc(sizeof(struct msg_struct *));
+	// reservo memoria para la structura del msj
+
+	/* Enter the loop that defines the task behavior. */
+
+	for (;;) {
+
+		/* Place this task in the blocked state until it is time to run again.
+		 The block state is specified in ticks, the constant used converts ticks
+		to ms.  While in the blocked state this task will not consume any CPU
+		time.
+		*/
+		vTaskDelayUntil(&xLastWakeTime, xPeriod);
+		/**vTaskDelayUntil () es la función API que debe usarse cuando se desea que su tarea
+		*  se ejecute periódicamente con una frecuencia fija,el tiempo en el que se desbloquea
+		*  la tarea de llamada es absoluto, y no relativo cuando se llamó a la función vTaskDelay (). */
+
+
+		msg->msg = NULL;
+		msg->valor = (char) (rand() % 45 +10); //*Crea un valor entre 10 y 55 y lo casteo a char para su envio
+
+		/*(pdMS_TO_TICKS(5): La cantidad máxima de tiempo que la tarea debe permanecer en el
+		* estado Bloqueado para esperar a que haya espacio disponible en la cola,
+		* en caso de que la cola ya esté llena..*/
+		xQueueSend(xPointerQueue, &msg, pdMS_TO_TICKS(5));
+
+
+
+		/*Free a estructura*/
+		vPortFree(msg);
+
+	}
+}
+
+/**
+ * Tarea aperiodica que genera y envia una cadena de longitud random, y su envio es aperiodico, tiempo variable
+ *
+ */
+static void vAperiodicaTask(void *pvParameters) {
+
+	portTickType xLastWakeTime;
+	//Aloco estructura para cada string generado para colocar en la cola*/
+	struct msg_struct *msg = pvPortMalloc(sizeof(struct msg_struct *));
+	msg->msg= pvPortMalloc(sizeof(char *));
+
+	//Para limpiar
+	msg->valor = 0;
+	//int random_len = 0;
+
+	xLastWakeTime = xTaskGetTickCount();
+	//TickType_t xPeriod;
+	/* Define a task that performs an action every random milisecons starting*/
+	const TickType_t xPeriod = pdMS_TO_TICKS((rand() % (100 - 70) + 70)); //100-200 ms
+
+	for (;;) {
+
+
+
+
+		//Delay. Place this task in the blocked state until it is time to run again.
+		vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+
+		msg->msg = vRandom_String();
+		msg->valor = 0;
+
+		//Envio string, esperando hasta 5[ms]  si la cola esta llena
+		xQueueSend(xPointerQueue, &msg, pdMS_TO_TICKS(5));
+
+		/*Free a estructura*/
+		vPortFree(msg->msg);
+	}
+
+}
+
+/**
+ * Tarea de recepcion. si hay algo en la cola y lo recibe, luego lo
+ * reenvia por puerto serie.
+ *
+ */
+
+static void vConsumidorTask(void *pvParameters) {
+
+	struct msg_struct * pcReceivedMsg ; //puntero a estructura
+	portBASE_TYPE xStatus = pvPortMalloc(sizeof(struct msg_struct *)); //creo puntero a estructura
+	char buff_aux[BUFF_AUX];
+
+	/*Modulo UART*/
+	UART1_Init();
+
+	for (;;) {
+
+		//chequeo si llego algo a la cola
+		if (xQueueReceive(xPointerQueue, &pcReceivedMsg,portNEW_DELAY) == pdTRUE) {
+			 /*Data was successfully received from the queue, print out the received
+			 value. */
+
+			if (pcReceivedMsg->msg == NULL) {  // envio elmensaje periodico, si esta vacio
+
+				///*Convierto valor recibido, de entero a ascii, en buff_aux*/
+				itoa(pcReceivedMsg->valor, buff_aux, 10);
+
+				strcat(buff_aux, "\r\n");//concateno un salto de linea y retorno de carro
+
+				//Envio por UART1 la termperatura recibida
+				UART_Send(buff_aux, strlen(buff_aux));
+
+
+			} else { // sino, envio la aperiodica
+
+				UART_Send(pcReceivedMsg->msg, strlen(pcReceivedMsg->msg)+1);
+				UART_Send("\r\n",2);// salto de linea
+
+			}
+
+			//librero estructura
+			vPortFree(pcReceivedMsg);
+		}
+	}
+}
+
+char * vRandom_String() {
+
+	static char caracteres[] = "acb123def456thb678ikl890MASLAKSJDHFGG1qa2ws3ed4rf5tg6yh7uj8ik9ol0p";
+	int length_char = (rand() % (MAX_STRING_LEN )) + 1;
+
+	char* var_string = pvPortMalloc(length_char); //aloco memoria
+
+	for (int i = 0; i < length_char-1; i++) {
+
+		var_string[i] = caracteres[rand() % MAX_STRING_LEN];
+	}
+
+
+	return var_string;
+}
+
+/**
+ * Configuracion Modulo UART1
+ */
+void UART1_Init(void) {
+
+	/*UART1*/
+	LPC_SC->PCONP |= (1 << 4);
+
+	/*PCLKSEL0*/
+	LPC_SC->PCLKSEL0 |= (1 << 8);
+
+	/*Configuracion*/
+	//LPC_UART1->LCR = 0x03;/*8 bits palabra*/
+	//LPC_UART3->LCR |= (1 << 2);/* 1 Bit de stop*/
+	LPC_UART1->LCR |= 0b10000011; //8bit 1bit stop
+	LPC_UART1->DLL = 54; //*U1LCR 0b10100001 = 54 ; para 115200 baudrate
+	LPC_UART1->DLM = 0;
+	LPC_UART1->LCR &= ~(1 << 7);
+
+	LPC_PINCON->PINSEL0 |= (1 << 30); // configurar los pines port 0 para uart1
+
+}
+
+void UART_Send(char* data, int size) {
+	for (int i = 0; i < size; i++) {
+		while ((LPC_UART1->LSR & (1 << 5)) == 0) {
+		}//Wait for Previous transmission
+		LPC_UART1->THR = data[i];
+	}
+}
+
+
+void vConfigureTimerForRunTimeStats(void) {
+	const unsigned long TCR_COUNT_RESET = 2, CTCR_CTM_TIMER = 0x00,
+			TCR_COUNT_ENABLE = 0x01;
+
+	/* This function configures a timer that is used as the time base when
+	 collecting run time statistical information - basically the percentage
+	 of CPU time that each task is utilising.  It is called automatically when
+	 the scheduler is started (assuming configGENERATE_RUN_TIME_STATS is set
+	 to 1). */
+
+	/* Power up and feed the timer. */
+	LPC_SC->PCONP |= 0x02UL;
+	LPC_SC->PCLKSEL0 = (LPC_SC->PCLKSEL0 & (~(0x3 << 2))) | (0x01 << 2);
+
+	/* Reset Timer 0 */
+	LPC_TIM0->TCR = TCR_COUNT_RESET;
+
+	/* Just count up. */
+	LPC_TIM0->CTCR = CTCR_CTM_TIMER;
+
+	/* Prescale to a frequency that is good enough to get a decent resolution,
+	 but not too fast so as to overflow all the time. */
+	LPC_TIM0->PR = ( configCPU_CLOCK_HZ / 10000UL) - 1UL;
+
+	/* Start the counter. */
+	LPC_TIM0->TCR = TCR_COUNT_ENABLE;
+}
+
+/*
+ * Necessary functions for FreeRTOS
+ */
+void vApplicationStackOverflowHook(TaskHandle_t pxTask, char *pcTaskName) {
+	/* This function will get called if a task overflows its stack. */
+	(void) pxTask;
+	(void) pcTaskName;
+	for (;;)
+		;
+}
